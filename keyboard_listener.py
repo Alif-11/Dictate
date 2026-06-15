@@ -31,6 +31,12 @@ def _on_release(key: keyboard.Key):
         #TODO: End transcription
     
 def global_listen():
+    """
+    Precondition:
+        For this function to appropriately work, Ghostty must have appropriate computer access.
+        You can give Ghostty this by going to System Settings > Privacy & Security > Accessibility.
+        Toggle on Ghostty before running this script. MAKE SURE TO TOGGLE GHOSTTY OFF WHEN YOU'RE DONE.
+    """
     with keyboard.Listener(on_press=_on_press, on_release=_on_release) as listener:
         listener.join()
 
