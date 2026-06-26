@@ -6,6 +6,7 @@ import tty
 import termios
 import select
 import time
+import socket
 import numpy as np
 import sounddevice as sd
 import mlx_whisper
@@ -13,6 +14,8 @@ import mlx_whisper
 
 SAMPLE_RATE = 16000
 MODEL_NAME = "mlx-community/whisper-large-v3-turbo"
+UDP_IP = "127.0.0.1"
+UDP_PORT = 9876
 raw_audio_queue = queue.Queue()
 
 AVOID_REPEAT_DELAY = 0.4
@@ -20,11 +23,12 @@ AVOID_REPEAT_DELAY = 0.4
 def audio_callback(indata, frames, time, status):
     raw_audio_queue.put(indata.copy())
 
-def check_keypress():
-    dr, _, _ = select.select([sys.stdin], [], [], 0.0)
-    if dr:
-        return sys.stdin.read(1)
-    return None
+def check_udp_signal(udp_socket):
+    try:
+        data, _ = udp_socket.recvfrom(1024)
+        return data.decode()
+    except BlockingIOError:
+        return None
 
 
 def _setup_transcription():
@@ -33,8 +37,8 @@ def _setup_transcription():
     
     subprocess.run(['clear'])
     print("System Ready!")
-    print("Click inside this terminal and tap [SPACEBAR] to START.")
-    print("Tap [SPACEBAR] again as soon as you finish talking to STOP.")
+    print("Press [Ctrl+Space] to START transcription.")
+    print("Press [Ctrl+Space] again as soon as you finish talking to STOP.")
     print("Press [Ctrl+C] to exit.\n")
 
     # Keep track of audio right before space was hit, just to allow transcription software better context
@@ -69,6 +73,11 @@ def transcription_loop():
         last_cmd_timestamp, stream, old_settings = \
         _setup_transcription()
 
+    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    udp_socket.setblocking(False)
+    udp_socket.bind((UDP_IP, UDP_PORT))
+
     with stream:
         try:
             
@@ -91,25 +100,25 @@ def transcription_loop():
                     else:
                         speech_frames.append(audio_frame_float)
 
-                # Check for spacebar click
-                key = check_keypress()
-                if key != ' ':
+                # Check for UDP signal from keyboard listener
+                signal = check_udp_signal(udp_socket)
+                if signal is None:
                     continue
-                    
+
                 current_cmd_timestamp = time.time()
                 if current_cmd_timestamp - last_cmd_timestamp < AVOID_REPEAT_DELAY:
                     continue
                 
                 last_cmd_timestamp = current_cmd_timestamp 
 
-                if not recording_active:
+                if signal == "START":
                     # START RECORDING STEP
                     recording_active = True
                     sys.stdout.write(f"\r[RECORDING ACTIVE] - Speak now...")
                     sys.stdout.flush()
                     speech_frames = list(pre_roll_buffer)
                     pre_roll_buffer.clear()
-                else:
+                elif signal == "STOP":
                     # STOP RECORDING STEP
                     sys.stdout.write("\r[DRAINING AUDIO PIPELINE...]")
                     sys.stdout.flush()
@@ -138,7 +147,7 @@ def transcription_loop():
                     # Reset states
                     recording_active = False
                     speech_frames = []
-                    print(f"\nTap [SPACEBAR] to begin your next phrase...")
+                    print(f"\nPress [Ctrl+Space] to begin your next phrase...")
 
         except KeyboardInterrupt:
             print("\nShutting down transcription engine...")
