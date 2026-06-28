@@ -15,7 +15,7 @@ import mlx_whisper
 SAMPLE_RATE = 16000
 MODEL_NAME = "mlx-community/whisper-large-v3-turbo"
 UDP_IP = "127.0.0.1"
-UDP_PORT = 9876
+UDP_TRANSCRIBE_PORT = 9876
 raw_audio_queue = queue.Queue()
 
 AVOID_REPEAT_DELAY = 0.4
@@ -25,8 +25,8 @@ def audio_callback(indata, frames, time, status):
 
 def check_udp_signal(udp_socket):
     try:
-        data, _ = udp_socket.recvfrom(1024)
-        return data.decode()
+        data, listen_address = udp_socket.recvfrom(1024)
+        return data.decode(), listen_address
     except BlockingIOError:
         return None
 
@@ -76,12 +76,11 @@ def transcription_loop():
     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     udp_socket.setblocking(False)
-    udp_socket.bind((UDP_IP, UDP_PORT))
+    udp_socket.bind((UDP_IP, UDP_TRANSCRIBE_PORT))
 
     with stream:
         try:
             
-            # Terminal mode shifted to allow for lightning fast spacebar handling
             tty.setcbreak(sys.stdin.fileno())
 
             while True:
@@ -101,9 +100,10 @@ def transcription_loop():
                         speech_frames.append(audio_frame_float)
 
                 # Check for UDP signal from keyboard listener
-                signal = check_udp_signal(udp_socket)
-                if signal is None:
+                udp_signal = check_udp_signal(udp_socket)
+                if udp_signal is None:
                     continue
+                signal, listen_address = udp_signal
 
                 current_cmd_timestamp = time.time()
                 if current_cmd_timestamp - last_cmd_timestamp < AVOID_REPEAT_DELAY:
@@ -143,6 +143,7 @@ def transcription_loop():
                             print(f"[CAPTURED OUTPUT] : {final_text}")
                         else:
                             print("[CAPTURED OUTPUT] : (No clear speech detected)")
+                        udp_socket.sendto(final_text.encode(), listen_address)
                     
                     # Reset states
                     recording_active = False
